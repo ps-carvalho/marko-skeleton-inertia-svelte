@@ -1,27 +1,27 @@
 import { createInertiaApp } from '@inertiajs/svelte';
 import { render } from 'svelte/server';
 import http from 'http';
+import { createPageRegistry, resolvePage } from './support/pages';
 
-const pageModules = import.meta.glob([
-  '/app/**/resources/js/pages/**/*.svelte',
-  '/modules/**/resources/js/pages/**/*.svelte',
-], { eager: true });
+const pageModules = import.meta.glob(
+  [
+    '/app/**/resources/js/pages/**/*.svelte',
+    '!/app/**/resources/js/pages/**/*.test.svelte',
+    '!/app/**/resources/js/pages/**/*.spec.svelte',
+    '/modules/**/resources/js/pages/**/*.svelte',
+    '!/modules/**/resources/js/pages/**/*.test.svelte',
+    '!/modules/**/resources/js/pages/**/*.spec.svelte',
+  ],
+  { eager: true },
+);
 
-function pathToName(path) {
-  const match = path.match(/\/resources\/js\/pages\/(.+)\.svelte$/);
-  return match ? match[1] : path;
-}
-
-const pages = {};
-for (const [path, mod] of Object.entries(pageModules)) {
-  pages[pathToName(path)] = mod;
-}
+const pages = createPageRegistry(pageModules);
 
 let renderInertiaPagePromise;
 
 function getRenderInertiaPage() {
   renderInertiaPagePromise ??= createInertiaApp({
-    resolve: (name) => pages[name],
+    resolve: (name) => resolvePage(pages, name, 'Svelte'),
   });
 
   return renderInertiaPagePromise;
@@ -44,9 +44,9 @@ const server = http.createServer(async (req, res) => {
   req.on('end', async () => {
     try {
       const page = JSON.parse(body);
-      const pageModule = pages[page.component];
-
-      if (!pageModule) {
+      try {
+        resolvePage(pages, page.component, 'Svelte');
+      } catch {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: `Unknown page: ${page.component}` }));
         return;
@@ -56,10 +56,12 @@ const server = http.createServer(async (req, res) => {
       const { head, body: html } = await renderInertiaPage(page, render);
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        head: Array.isArray(head) ? head.join('\n') : '',
-        body: html,
-      }));
+      res.end(
+        JSON.stringify({
+          head: Array.isArray(head) ? head.join('\n') : '',
+          body: html,
+        }),
+      );
     } catch (error) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: error.message }));
